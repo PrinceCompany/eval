@@ -1,58 +1,79 @@
-# MIT License
-#
-# Copyright (c) 2018-present Furoin <https://github.com/furoin>
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# eval and exec ..py
 
-from pyrogram import Client, Filters
+import asyncio
+import io
+import logging
+import os
+import shutil
+import sys
+import time
+import traceback
 
-RUNNING = "**Eval Expression:**\n```{}```\n**Running...**"
-ERROR = "**Eval Expression:**\n```{}```\n**Error:**\n```{}```"
-SUCCESS = "**Eval Expression:**\n```{}```\n**Success**"
-RESULT = "**Eval Expression:**\n```{}```\n**Result:**\n```{}```"
+from pyrogram import Client,filters
 
+MAX_MESSAGE_LENGTH = 4096
+FREE_USER_MAX_FILE_SIZE = 2097152000
 
-@Client.on_message(Filters.command("eval", prefix="!"))
-def eval_expression(client, message):
-    expression = " ".join(message.command[1:])
-
-    if expression:
-        m = message.reply(RUNNING.format(expression))
-
-        try:
-            result = eval(expression)
-        except Exception as error:
-            client.edit_message_text(
-                m.chat.id,
-                m.message_id,
-                ERROR.format(expression, error)
-            )
-        else:
-            if result is None:
-                client.edit_message_text(
-                    m.chat.id,
-                    m.message_id,
-                    SUCCESS.format(expression)
-                )
-            else:
-                client.edit_message_text(
-                    m.chat.id,
-                    m.message_id,
-                    RESULT.format(expression, result)
-                )
+@Client.on_message(filters.command("eval", prefixes="/"))
+async def eval_handler(bot, message):
+  if True:
+    status_message = await message.reply_text("Processing ...")
+    cmd = message.text.split(" ", maxsplit=1)[1]
+    reply_to_id = message.id
+    if message.reply_to_message:
+      reply_to_id = message.reply_to_message.id
+    old_stderr = sys.stderr
+    old_stdout = sys.stdout
+    redirected_output = sys.stdout = io.StringIO()
+    redirected_error = sys.stderr = io.StringIO()
+    stdout, stderr, exc = None, None, None
+  
+    try:
+      await aexec(cmd, bot, message)
+    except Exception:
+      exc = traceback.format_exc()
+        
+    stdout = redirected_output.getvalue()
+    stderr = redirected_error.getvalue()
+    sys.stdout = old_stdout
+    sys.stderr = old_stderr
+  
+    evaluation = ""
+    if exc:
+      evaluation = exc
+    elif stderr:
+      evaluation = stderr
+    elif stdout:
+      evaluation = stdout
+    else:
+      evaluation = "Success"
+  
+    final_output = (
+      "<b>EVAL</b>: <code>{}</code>\n\n<b>OUTPUT</b>:\n<code>{}</code> \n".format(
+        cmd, evaluation.strip()
+      )
+    )
+      
+          
+  
+    if len(final_output) > MAX_MESSAGE_LENGTH:
+      with open("eval.text", "w+", encoding="utf8") as out_file:
+        out_file.write(str(final_output))
+        await message.reply_document(
+          document="eval.text",
+          caption=cmd,
+          disable_notification=True,
+          reply_to_message_id=reply_to_id,
+        )
+        os.remove("eval.text")
+        await status_message.delete()
+    else:
+      await status_message.edit(final_output)
+        
+        
+async def aexec(code, bot, message):
+  exec(
+    f"async def __aexec(bot, message): "
+    + "".join(f"\n {l}" for l in code.split("\n"))
+  )
+  return await locals()["__aexec"](bot, message)
